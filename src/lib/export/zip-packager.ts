@@ -1,0 +1,110 @@
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
+import type { IconGlyph, Project } from '@/types';
+import { generateFont } from '@/lib/font-generation/opentype-generator';
+import { generateCSS } from '@/lib/font-generation/css-generator';
+import { generateHTMLDemo } from '@/lib/font-generation/html-demo-generator';
+import { compressWoff2 } from '@/lib/font-generation/woff2';
+
+export interface PackageOptions {
+  includeTTF: boolean;
+  includeWOFF: boolean;
+  includeWOFF2: boolean;
+  includeSVGFont: boolean;
+  includeCSS: boolean;
+  includeHTML: boolean;
+}
+
+const DEFAULT_OPTIONS: PackageOptions = {
+  includeTTF: true,
+  includeWOFF: true,
+  includeWOFF2: true,
+  includeSVGFont: false,
+  includeCSS: true,
+  includeHTML: true,
+};
+
+export async function downloadFontPackage(
+  icons: IconGlyph[],
+  project: Project,
+  options: Partial<PackageOptions> = {}
+): Promise<void> {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const { fontFamily } = project;
+
+  const { ttfBuffer, codepointMap } = generateFont(icons, project);
+  const css = generateCSS(icons, project, codepointMap);
+  const html = generateHTMLDemo(icons, project, codepointMap, css);
+
+  const zip = new JSZip();
+  const folder = zip.folder(fontFamily)!;
+  const fontsFolder = folder.folder('fonts')!;
+
+  if (opts.includeTTF) {
+    fontsFolder.file(`${fontFamily}.ttf`, ttfBuffer);
+  }
+
+  if (opts.includeWOFF) {
+    fontsFolder.file(`${fontFamily}.woff`, ttfBuffer);
+  }
+
+  if (opts.includeWOFF2) {
+    try {
+      const woff2Buffer = await compressWoff2(ttfBuffer);
+      fontsFolder.file(`${fontFamily}.woff2`, woff2Buffer);
+    } catch (e) {
+      console.warn('WOFF2 compression failed, skipping:', e);
+    }
+  }
+
+  if (opts.includeCSS) {
+    folder.file(`${fontFamily}.css`, css);
+  }
+
+  if (opts.includeHTML) {
+    folder.file('demo.html', html);
+  }
+
+  // Include SVG source files
+  const svgFolder = folder.folder('svg')!;
+  for (const icon of icons) {
+    svgFolder.file(`${icon.name}.svg`, icon.svgContent);
+  }
+
+  const blob = await zip.generateAsync({ type: 'blob' });
+  saveAs(blob, `${fontFamily}.zip`);
+}
+
+export async function downloadSingleFormat(
+  icons: IconGlyph[],
+  project: Project,
+  format: 'ttf' | 'woff' | 'woff2' | 'css'
+): Promise<void> {
+  const { fontFamily } = project;
+  const { ttfBuffer, codepointMap } = generateFont(icons, project);
+
+  switch (format) {
+    case 'ttf': {
+      const blob = new Blob([ttfBuffer], { type: 'font/ttf' });
+      saveAs(blob, `${fontFamily}.ttf`);
+      break;
+    }
+    case 'woff': {
+      const blob = new Blob([ttfBuffer], { type: 'font/woff' });
+      saveAs(blob, `${fontFamily}.woff`);
+      break;
+    }
+    case 'woff2': {
+      const woff2Buffer = await compressWoff2(ttfBuffer);
+      const blob = new Blob([woff2Buffer], { type: 'font/woff2' });
+      saveAs(blob, `${fontFamily}.woff2`);
+      break;
+    }
+    case 'css': {
+      const css = generateCSS(icons, project, codepointMap);
+      const blob = new Blob([css], { type: 'text/css' });
+      saveAs(blob, `${fontFamily}.css`);
+      break;
+    }
+  }
+}
